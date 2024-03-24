@@ -1,0 +1,683 @@
+<html>
+<body>
+<style>
+#hamsterwheel{
+  background: black;
+}
+</style>
+<canvas id="hamsterwheel"></canvas>
+<script>
+  var mapWidth = 60;
+  var mapHeight = 60;
+  var squareSide = 8 * 2;
+  var squareCenter = squareSide / 2 - 1;
+  var offset = 10;
+
+  var Now = 0;
+  var LastDraw = 0;
+  var ElapsedTime = 0;
+  var fps = 25;
+  var fpsInterval = 1000 / fps; // milliseconds.
+
+  var c = document.getElementById("hamsterwheel");
+  c.width = 1600;
+  c.height = 1200;
+  ctx = c.getContext("2d");
+
+  var map = null;
+  var pathChoices = new Array();
+  
+  var colors = ["Olive","OrangeRed","Orchid","SeaGreen","Teal","red","yellow","orange"];
+
+  var walkCost = 0.51; // Should be a small value compared to the terrain obstacle cost. Straight ground compared to strong uphill. 
+  var maxTerrainCost = 4.99;
+  var dijkstraList = new Array();
+
+  var highestCost = 0;
+  
+  createMap();
+  gameLoop();
+
+  function drawMap()
+  {
+    for(var y=0;y<mapHeight;y++)
+    {
+      for(var x=0;x<mapWidth;x++)
+      {
+        if(map[x][y].visited == true && map[x][y].node.computed)
+        {
+          //drawSquare(x * (squareSide + 1), y * (squareSide + 1), "blue", "Navy");
+          drawDijkstraSquare(x * (squareSide + 1), y * (squareSide + 1),map[x][y].node);
+        }
+        else
+        {
+          var height = map[x][y].terrainCost * 255;
+          drawSquare(x * (squareSide + 1), y * (squareSide + 1), "rgb("+height+","+height+","+height+")", "green");
+        }
+      }
+    }
+  }
+  function drawSquare(x, y, color, borderColor)
+  {
+    ctx.fillStyle=borderColor; 
+    ctx.fillRect(offset + x,offset + y,squareSide,squareSide);
+
+    ctx.fillStyle=color; 
+    ctx.fillRect(offset + x + 1,offset + y + 1,squareSide / 2,squareSide / 2);
+  }
+  function drawDijkstraSquare(x,y,node)
+  {
+    if(highestCost < node.cost)
+      highestCost = node.cost;
+    
+    var val = node.cost / highestCost * 255;
+    var blue = "rgb("+0+","+0+","+val+")";
+    
+    ctx.fillStyle="Navy";
+    ctx.fillRect(offset + x,offset + y,squareSide,squareSide);
+
+    ctx.fillStyle=blue; 
+    switch(node.from)
+    {
+      case "start":
+        ctx.fillRect(offset + x + squareCenter,offset + y,2,squareSide);
+        ctx.fillRect(offset + x ,offset + y + squareCenter,squareSide,2);
+        break;
+      case "fromAbove":
+        ctx.fillRect(offset + x + squareCenter - 1,offset + y - 1,4,4);
+        ctx.fillRect(offset + x + squareCenter,offset + y,2,squareSide);
+        break;
+      case "fromBelow":
+        ctx.fillRect(offset + x + squareCenter - 1,offset + y + squareCenter + 2,4,4);
+        ctx.fillRect(offset + x + squareCenter,offset + y,2,squareSide);
+        break;
+      case "fromLeft":
+        ctx.fillRect(offset + x - 1,offset + y + squareCenter - 1,4,4);
+        ctx.fillRect(offset + x,offset + y + squareCenter,squareSide,2);
+        break;
+      case "fromRight":
+        ctx.fillRect(offset + x + squareCenter + 2,offset + y + squareCenter - 1,4,4);
+        ctx.fillRect(offset + x ,offset + y + squareCenter,squareSide,2);
+        break;
+    }
+  }
+  
+  function createMap()
+  {
+    map = new Array(mapWidth);
+    for(var x=0;x<mapWidth;x++)
+    {
+      map[x] = new Array(mapHeight);
+      
+      for(var y=0;y<mapHeight;y++)
+      {
+        var modifier = 0.1;
+        
+        if(Math.random() < 0.5)
+        {
+          modifier = 1;
+        }
+        
+        var tc = modifier * Math.random() * maxTerrainCost;
+        
+        map[x][y] = {visited: false, pathId: -1, terrainCost: tc};
+        
+        if(x == 12 || y == 42)
+          map[x][y].terrainCost = 0;
+          
+        if(x == 50 || y == 65)
+          map[x][y].terrainCost = 0.05;
+          
+        if(x == 90 || y == 19)
+          map[x][y].terrainCost = 0.1;
+      }
+    }
+   
+    /*dijkstraList.push({cost: 5});
+    dijkstraList.push({cost: 3});
+    dijkstraList.push({cost: 12, mjau:1});  // Same value, so they should never swap with each other.
+    dijkstraList.push({cost: 12, mjau:2});
+    dijkstraList.push({cost: 2});
+    dijkstraList.push({cost: 1});
+    sortList();*/
+    
+    // Add a starting position. 
+    addNode(
+      Math.floor(Math.random() * mapWidth), 
+      Math.floor(Math.random() * mapHeight),
+      0.0,
+      "start"
+    );
+  }
+  function gameLoop()
+  {
+    Now = Date.now();
+    ElapsedTime = Now - LastDraw;
+
+    if (ElapsedTime >= fpsInterval)
+    {
+      // Enough time has passed, time to update and draw.
+      LastDraw = Now;
+      
+      // 
+      if(eatCheapestNode() == false)
+      {
+        console.log("Finished!");
+      }
+      else
+      {
+        console.log("Size: " + dijkstraList.length);
+      }
+
+      drawMap();
+    }
+    
+    // Always keep asking for the next animation frame.
+    window.requestAnimationFrame(gameLoop);    
+  }
+    
+  // shift() the cheapest node and add it's neighbouring map positions. 
+  // Returns false if the list is empty, otherwise true if we are supposed to call this again.
+  function eatCheapestNode()
+  {
+    if(dijkstraList.length == 0)
+      return false;
+      
+    var node = dijkstraList.shift();
+    
+    // node is now the cheapest node found, so we know it is part of the cheapest road found so far. Let's add its four neighbours to the list.
+    addNode(node.x-1,node.y,node.cost,"fromRight");
+    addNode(node.x+1,node.y,node.cost,"fromLeft");
+    addNode(node.x,node.y-1,node.cost,"fromBelow");
+    addNode(node.x,node.y+1,node.cost,"fromAbove");
+
+    node.computed = true;
+    
+    // We might have added one or more nodes now, so re-sort the list.
+    sortList();
+    
+    return true;
+  }
+  
+  // Add a new node at position x,y on the map, where the neighbour node adding it has the accumulated cost of costSoFar.
+  // cheating a bit by polluting the map with a visited boolean, but so what. 
+  function addNode(x,y,costSoFar,from)
+  {
+    if(!validMapPostion(x,y))
+      return false;
+    
+    if(map[x][y].visited == true)
+      return false;
+        
+    costSoFar += map[x][y].terrainCost;
+    var node = {x:x, y:y, cost:costSoFar,from:from,computed:false};
+    dijkstraList.push(node)
+    
+    map[x][y].visited = true;
+    map[x][y].node = node;
+    
+    return true;
+  }
+  
+  // Sort by cost, smallest cost goes first.
+  function sortList()
+  {
+    dijkstraList.sort(compareNodes);
+  }
+  function compareNodes(a,b)
+  {
+    if(a.cost < b.cost)
+    {
+      return -1;
+    }
+    else if(a.cost > b.cost)
+    {
+      return 1;
+    }
+    else
+    {
+      return 0;
+    }
+  }
+  
+  function createPath()
+  {
+    if(pathChoices.length == 0)
+    {
+      // No more choices!
+      return true;
+    }
+  
+    var startPos = pathChoices.pop();
+    
+    if(map[startPos.x][startPos.y].visited == false)
+    {
+      // We found an unvisited position! Start our search.
+      var x = startPos.x;
+      var y = startPos.y;
+      var dir = startPos.dir;
+      var pathId = startPos.pathId;
+      var stepsTaken = 0;
+      var stepsSinceLastDirChange = 0;
+      
+      // Det här kan du ju glömma med den här approachen! 
+      // Du får ha en a-star algoritm för att skapa vägar som tar hänsyn till uppförsbackar o sånt. 
+      // Då måste en path innehålla en lista med punkter den besökt, 
+      // eller så får varje punkt på kartan en kostnad utifrån startpunkten, och algoritmen fortsätter tills
+      // alla punkter är besökta. 
+      // Om man sätter upp ett antal målpunkter, så kan den därigenom dra "kortaste" vägen, den med minst vikt mellan de olika punkterna. 
+      // var pathCost = 0;
+      
+      while(true)
+      {
+        var pathIdInFront = pathIdInFrontOfPath(x,y,dir);
+        
+        /*if(pathIdInFront == pathId)
+        {
+          console.log("oh me!");
+        }*/
+        
+        // Change direction if we run into our self, or after a few steps because it's fun.
+        if(pathIdInFront == pathId || stepsSinceLastDirChange > 1 && Math.random() > 0.4)
+        {
+          stepsSinceLastDirChange = 0;
+          var newDir = randTurnDirection();
+          dir = updateDirection(dir, newDir);
+        }
+        
+        if(x < 0 || x >= mapWidth || y < 0 || y >= mapHeight)
+        {
+          // We hit a wall. Start over again. Randomize a new direction.
+          // var newDir = randTurnDirection();
+          // startPos.dir = updateDirection(startPos.dir, newDir);
+          // pathChoices.push(startPos);
+          break;
+        }
+        
+        if(map[x][y].visited == true)
+        {
+          // We found a visited spot! Break and be done.
+          break;
+        }
+        
+        // We want our path to be lonely in the sense we want all neighbours to be unvisited. That way we enforce walls of at least one unvisited space.
+        // 1 will generate only straight paths, as we don't accept any turns (would be 2 neighbours)
+        // 2 creates very good labyrintic lines not coming close to each other.
+        // 4 will accept crawling next to another path. 
+        // 5 or higher will allow almost any nr of neighbours.
+        /*if(lonelySpot(x,y,2) == false)
+        {
+          break;
+        }*/
+        
+        // We dont want to run into ourselfes. 
+        /*if(myselfCount(x,y,pathId) > 2)
+        {
+          break;
+        }
+        
+        // Set to zero to make all path keep away from each other.
+        // 3 is the perfect choice as it allow a path to crash straight into another path.
+        if(otherCount(x,y,pathId,3) > 3)
+        {
+          break;
+        }*/
+
+        var pathIdInFront = pathIdInFrontOfPath(x,y,dir);
+        var mc = myselfCount(x,y,pathId);
+        var oc = otherCount(x,y,pathId)
+
+        if(mc < 2 && pathIdInFront > 0 && oc <= 3)
+        {
+          // We have someone straight in front of us, that's ok!
+          // Its ok!
+        }
+        /*else if(mc < 2 && (oc == 3))
+        {
+          // We crash -straight- into another line.
+          // It's ok! Visit the spot. 
+          // break;
+        }*/
+        
+        // Otherwise we accept no other neighbours.
+        // Accepting 2 allows for a nicer connection.
+        else if(oc > 1)
+        {
+          break;
+        }
+        // Otherwise we can accept ourselfes going straight or turning to the left or right.
+        else if(mc > 2)
+        {
+          break;
+        }
+        
+        // Position deemed ok, lets walk here.
+        map[x][y].visited = true;
+        map[x][y].pathId = pathId;
+        
+        if(dir == "left")
+        {
+          x--;
+        }
+        else if(dir == "right")
+        {
+          x++;
+        }
+        else if(dir == "up")
+        {
+          y--;
+        }
+        else
+        {
+          y++;
+        }
+        stepsTaken++;
+        stepsSinceLastDirChange++;
+      }
+    }
+    else
+    {
+      console.log("oops, already visited spot.");
+    }
+
+    if(pathChoices.length == 0)
+    {
+      // No more choices!
+      return true;
+    }
+   
+    console.log("Added another path!");
+    return false;
+  }
+  
+  // Returns the pathId of the point in front of the given position. Or -1 or 0 if no path there.
+  function pathIdInFrontOfPath(x,y,dir)
+  {
+    if(dir == "left")
+    {
+      x--;
+    }
+    else if(dir == "right")
+    {
+      x++;
+    }
+    else if(dir == "up")
+    {
+      y--;
+    }
+    else
+    {
+      y++;
+    }
+    
+    if(x < 0 || x >= mapWidth || y < 0 || y >= mapHeight)
+    {
+      return -1;
+    }
+    
+    if(map[x][y].visited)
+      return map[x][y].pathId;
+    
+    return 0;
+  }
+  
+  function otherCount(x,y,pathId)//,acceptanceCount)
+  {
+    var spots = new Array();
+    spots.push(positionPathId(x-1,y-1)); // tl
+    spots.push(positionPathId(x,y-1));   // t
+    spots.push(positionPathId(x+1,y-1)); // tr
+    spots.push(positionPathId(x-1,y)); // l
+    spots.push(positionPathId(x+1,y)); // r
+    spots.push(positionPathId(x-1,y+1)); // bl
+    spots.push(positionPathId(x,y+1));   // b
+    spots.push(positionPathId(x+1,y+1)); // br
+    
+    var othersCount = 0;
+    spots.forEach((spotPathId, index) => { 
+        if(spotPathId > 0 && spotPathId != pathId)
+        {
+          othersCount++;
+        }
+      });      
+  
+    return othersCount;
+    
+    /*if(othersCount <= acceptanceCount)
+    {
+      return true;
+    }
+    
+    return false;*/    
+  }
+  
+  function myselfCount(x,y,pathId)
+  {
+    var spots = new Array();
+    spots.push(positionVisitedByPath(x-1,y-1,pathId)); // tl
+    spots.push(positionVisitedByPath(x,y-1,pathId));   // t
+    spots.push(positionVisitedByPath(x+1,y-1,pathId)); // tr
+    spots.push(positionVisitedByPath(x-1,y,pathId)); // l
+    spots.push(positionVisitedByPath(x+1,y,pathId)); // r
+    spots.push(positionVisitedByPath(x-1,y+1,pathId)); // bl
+    spots.push(positionVisitedByPath(x,y+1,pathId));   // b
+    spots.push(positionVisitedByPath(x+1,y+1,pathId)); // br
+    
+    var visitedCount = 0;
+    spots.forEach((item, index) => { 
+        if(item == 1)
+        {
+          visitedCount++;
+        }
+      });      
+    // console.log("visitedCount: " + visitedCount);
+  
+    return visitedCount;
+  
+    /*if(visitedCount <= 2)
+    {
+      // We have arrived here from a single path. Or we arrive here on a turning path, hence the acceptance of 2 visited. 
+      return true;
+    }
+    
+    return false;*/
+  }
+  
+  // Cheating a bit, we accept two visited neighbours, since we have arrived here in some way.
+  function lonelySpot(x,y,acceptanceCount)
+  {
+    var spots = new Array();
+    spots.push(positionVisited(x-1,y-1)); // tl
+    spots.push(positionVisited(x,y-1));   // t
+    spots.push(positionVisited(x+1,y-1)); // tr
+    spots.push(positionVisited(x-1,y)); // l
+    spots.push(positionVisited(x+1,y)); // r
+    spots.push(positionVisited(x-1,y+1)); // bl
+    spots.push(positionVisited(x,y+1));   // b
+    spots.push(positionVisited(x+1,y+1)); // br
+    
+    var visitedCount = 0;
+    spots.forEach((item, index) => { 
+        if(item == 1)
+        {
+          visitedCount++;
+        }
+      });      
+    // console.log("visitedCount: " + visitedCount);
+  
+    if(visitedCount <= acceptanceCount)
+    {
+      // We have arrived here from a single path. Or we arrive here on a turning path, hence the acceptance of 2 visited. 
+      return true;
+    }
+    
+    return false;
+  }
+  
+  // Returns -1 if outside map, otherwise 1 for visited, 0 for not.
+  function positionVisited(x,y)
+  {
+    if(x < 0 || x >= mapWidth || y < 0 || y >= mapHeight)
+    {
+      return -1;
+    }
+
+    if(map[x][y].visited)
+      return 1;
+    else 
+      return 0;
+  }
+  
+  function positionVisitedByPath(x,y,pathId)
+  {
+    if(x < 0 || x >= mapWidth || y < 0 || y >= mapHeight)
+    {
+      return -1;
+    }
+
+    if(map[x][y].visited && map[x][y].pathId == pathId)
+      return 1;
+    else 
+      return 0;
+  }
+  function positionPathId(x,y)
+  {
+    if(x < 0 || x >= mapWidth || y < 0 || y >= mapHeight)
+    {
+      return -1;
+    }
+    
+    if(map[x][y].visited)
+      return map[x][y].pathId;
+    else 
+      return 0;    
+  }
+  
+  function validMapPostion(x,y)
+  {
+    if(x < 0 || x >= mapWidth || y < 0 || y >= mapHeight)
+    {
+      return false;
+    }
+
+    return true;
+  }
+  
+  // Update the direction by turning in a newDir, i.e turning left or right. (Nothing happens if newDir is forward)
+  // Returns the new or unchanged direction.
+  function updateDirection(direction, newDir)
+  {
+    if(newDir != "forward")
+    {
+      switch(direction)
+      {
+        case "left":
+        {
+          if(newDir == "left")
+          {
+            direction = "down";
+          }
+          else
+          {
+            direction = "up";
+          }
+          break;
+        }
+        case "right":
+        {
+          if(newDir == "left")
+          {
+            direction = "up";
+          }
+          else
+          {
+            direction = "down";
+          }
+          break;
+        }
+        case "up":
+        {
+          if(newDir == "left")
+          {
+            direction = "left";
+          }
+          else
+          {
+            direction = "right";
+          }
+          break;
+        }
+        case "down":
+        {
+          if(newDir == "left")
+          {
+            direction = "right";
+          }
+          else
+          {
+            direction = "left";
+          }
+          break;
+        }
+      }
+    }
+    
+    return direction;
+  }
+  
+  function randTurnDirection()
+  {
+    var r = Math.random();
+    if(r < 0.33)
+    {
+      return "left";
+      
+    }
+    else if(r < 0.66)
+    {
+      return "right";
+    }
+    else
+    {
+      return "forward";
+    }
+  }
+  function randDirection()
+  {
+    var r = Math.random();
+    if(r < 0.25)
+    {
+      return "left";
+      
+    }
+    else if(r < 0.5)
+    {
+      return "up";
+    }
+    else if(r < 0.75)
+    {
+      return "right";
+    }
+    else
+    {
+      return "down";
+    }
+  }
+  
+  function addRandomPathChoice(pathId)
+  {
+    addNewPathChoice(
+      Math.floor(Math.random() * mapWidth), 
+      Math.floor(Math.random() * mapHeight),
+      randDirection(),
+      pathId);
+  }
+  
+  function addNewPathChoice(x,y,direction,pathId)
+  {
+    pathChoices.push({x:x,y:y,dir:direction,pathId:pathId});
+  }
+  
+</script>
+</body>
+</html>
